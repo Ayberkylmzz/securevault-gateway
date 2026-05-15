@@ -1,0 +1,60 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+securevault:
+  api-key: ${SECURE_VAULT_API_KEY}
+
+jwt:
+  secret: ${JWT_SECRET}
+
+spring:
+  application:
+    name: securevault
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST}
+      port: 6379
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+  cloud:
+    gateway:
+      routes:
+        - id: identity-guard-auth-route
+          uri: ${IDENTITY_GUARD_SERVICE_URL}
+          predicates:
+            - Path=/auth/**
+          filters:
+            - ApiKeyFilter
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 2
+                redis-rate-limiter.burstCapacity: 5
+                key-resolver: "#{@userKeyResolver}"
+        - id: identity-guard-secure-route
+          uri: ${IDENTITY_GUARD_SERVICE_URL}
+          predicates:
+            - Path=/api/v1/secure-data/**
+          filters:
+            - ApiKeyFilter
+            - JwtAuthenticationFilter
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 2
+                redis-rate-limiter.burstCapacity: 5
+                key-resolver: "#{@userKeyResolver}"
+            - name: CircuitBreaker
+              args:
+                name: identityServiceCircuitBreaker
+                fallbackUri: forward:/fallback/identityService
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      identityServiceCircuitBreaker:
+        slidingWindowSize: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10000
+        permittedNumberOfCallsInHalfOpenState: 3
